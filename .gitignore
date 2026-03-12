@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+filters.json
+seen_cars.json
+encar_monitor.log
