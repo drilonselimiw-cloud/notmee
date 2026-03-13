@@ -342,6 +342,40 @@ def fetch_mango_listings(url: str) -> list[dict]:
     return []
 
 
+def fetch_first_registration_year(car_code: str) -> int | None:
+    """
+    Fetch a MangoCar detail page and extract the First Registration year.
+    Returns the year as int (e.g. 2016) or None if not found.
+    """
+    detail_url = DETAIL_URL_TEMPLATE.format(code=car_code)
+    headers = {
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    for profile in _IMPERSONATE_PROFILES:
+        try:
+            resp = curl_requests.get(
+                detail_url, headers=headers, impersonate=profile, timeout=45
+            )
+            if resp.status_code != 200:
+                continue
+            # Look for "First Registration Date</span>...<span...>2016.05.31"
+            m = re.search(
+                r'First Registration Date</span>.*?<span[^>]*>.*?(\d{4})\.\d{2}\.\d{2}',
+                resp.text, re.DOTALL
+            )
+            if m:
+                year = int(m.group(1))
+                logger.info(f"MangoCar: {car_code} first reg year = {year}")
+                return year
+            logger.warning(f"MangoCar: First reg date not found for {car_code}")
+            return None
+        except Exception as e:
+            logger.warning(f"MangoCar detail fetch error ({profile}): {e}")
+            continue
+    return None
+
+
 def get_mango_listings(filters: dict = None, search_url: str = None,
                        max_results: int = 50) -> list[dict]:
     """

@@ -19,6 +19,7 @@ Commands (send in Telegram chat):
 
 import os
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -26,7 +27,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from scraper import get_car_listings, build_query_from_filters
-from scraper_mango import get_mango_listings
+from scraper_mango import get_mango_listings, fetch_first_registration_year
 from notifier import send_telegram, format_price, format_mileage
 from filter_store import (
     add_filter, remove_filter, pause_filter, resume_filter,
@@ -115,6 +116,8 @@ def format_filter_summary(f: dict) -> str:
 
     if p.get("search_url"):
         lines.append(f"  🔗 URL filter")
+        if p.get("min_year"):
+            lines.append(f"  📅 Min first reg year: {p['min_year']}")
     else:
         parts = []
         if p.get("manufacturer"):
@@ -279,19 +282,32 @@ def handle_conversation_step(chat_id, text):
 
 
 def cmd_url(chat_id, args, full_text):
-    # /url <name> <url>
+    # /url <name> <url> [min_year=XXXX]
     parts = full_text.split(maxsplit=2)
     if len(parts) < 3:
         tg_send(chat_id, (
-            "Usage: /url <name> <url>\n\n"
+            "Usage: /url <name> <url> [min_year=XXXX]\n\n"
             "Examples:\n"
             "/url Palisade https://www.encar.com/dc/dc_carsearchlist.do?carType=kor...\n"
-            "/url Tucson https://mangoworldcar.com/car-normal-search-list?maker=Hyundai..."
+            "/url Tucson https://mangoworldcar.com/car-normal-search-list?maker=Hyundai...\n"
+            "/url AudiA7 https://mangoworldcar.com/... min_year=2016"
         ))
         return
 
     name = parts[1]
-    url = parts[2].strip()
+    rest = parts[2].strip()
+
+    # Extract optional min_year=XXXX from the end
+    min_year = None
+    rest_parts = rest.split()
+    url_parts = []
+    for rp in rest_parts:
+        m = re.match(r'^min_year=(\d{4})$', rp)
+        if m:
+            min_year = int(m.group(1))
+        else:
+            url_parts.append(rp)
+    url = " ".join(url_parts)
 
     # Auto-detect platform from URL
     if "mangoworldcar.com" in url or "mangocar" in url.lower():
@@ -306,7 +322,11 @@ def cmd_url(chat_id, args, full_text):
         ))
         return
 
-    new_filter = add_filter(name, {"search_url": url}, platform=platform)
+    filter_params = {"search_url": url}
+    if min_year and platform == "mango":
+        filter_params["min_year"] = min_year
+
+    new_filter = add_filter(name, filter_params, platform=platform)
     if isinstance(new_filter, str):
         tg_send(chat_id, f"❌ {new_filter}")
         return
@@ -472,6 +492,23 @@ def check_filter(f: dict):
     # Update seen IDs with ALL listings
     all_ids = {str(car["id"]) for car in listings}
     update_seen_ids(filter_id, all_ids, total_new=len(new_cars))
+
+    # Apply min_year filter for mango: check first registration year on detail page
+    min_year = params.get("min_year")
+    if new_cars and platform == "mango" and min_year:
+        min_year = int(min_year)
+        filtered = []
+        for car in new_cars:
+            reg_year = fetch_first_registration_year(car["id"])
+            if reg_year is None:
+                # Fall back to modelYear if detail page fails
+                reg_year = int(car.get("year") or 0)
+            if reg_year >= min_year:
+                filtered.append(car)
+            else:
+                logger.info(f"  Filtered out {car['id']}: reg year {reg_year} < {min_year}")
+        logger.info(f"  min_year filter: {len(new_cars)} -> {len(filtered)} cars")
+        new_cars = filtered
 
     if new_cars:
         logger.info(f"  Found {len(new_cars)} new car(s) for '{filter_name}'!")
