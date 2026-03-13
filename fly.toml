@@ -9,7 +9,7 @@ primary_region = 'ams'
 [build]
 
 [env]
-  CHECK_INTERVAL_MINUTES = '5'
+  CHECK_INTERVAL_MINUTES = '15'
   MAX_RESULTS = '500'
 
 [processes]

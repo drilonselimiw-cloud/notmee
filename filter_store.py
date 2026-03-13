@@ -1,33 +1,92 @@
 """
 Filter storage module.
-Manages multiple named car search filters, persisted to a JSON file.
+Manages multiple named car search filters, persisted to Upstash Redis.
+Falls back to local JSON file if Redis is not configured.
 Each filter has: id, name, search params, active flag, and its own seen-car set.
 """
 
 import json
+import os
 import uuid
 import logging
 from datetime import datetime
 from pathlib import Path
 
+import requests as http_requests
+
 logger = logging.getLogger(__name__)
 
-FILTERS_FILE = Path(__file__).resolve().parent / "filters.json"
+# Redis config (Upstash REST API)
+REDIS_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "")
+REDIS_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
+REDIS_KEY = "car_bot:filters"
+
+# Local fallback
+_local_file = Path(__file__).resolve().parent / "filters.json"
+
+
+def _redis_available() -> bool:
+    return bool(REDIS_URL and REDIS_TOKEN)
+
+
+def _redis_get() -> dict | None:
+    """GET the filters JSON from Upstash Redis."""
+    try:
+        r = http_requests.get(
+            f"{REDIS_URL}/get/{REDIS_KEY}",
+            headers={"Authorization": f"Bearer {REDIS_TOKEN}"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        result = r.json().get("result")
+        if result:
+            return json.loads(result)
+    except Exception as e:
+        logger.warning(f"Redis GET failed: {e}")
+    return None
+
+
+def _redis_set(data: dict) -> bool:
+    """SET the filters JSON in Upstash Redis."""
+    try:
+        payload = json.dumps(data, ensure_ascii=False)
+        r = http_requests.post(
+            f"{REDIS_URL}",
+            headers={
+                "Authorization": f"Bearer {REDIS_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json=["SET", REDIS_KEY, payload],
+            timeout=10,
+        )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        logger.warning(f"Redis SET failed: {e}")
+        return False
 
 
 def _load_data() -> dict:
-    """Load the full data file."""
-    if FILTERS_FILE.exists():
+    """Load filters from Redis, falling back to local file."""
+    if _redis_available():
+        data = _redis_get()
+        if data:
+            return data
+    # Fallback to local file
+    if _local_file.exists():
         try:
-            return json.loads(FILTERS_FILE.read_text(encoding="utf-8"))
+            return json.loads(_local_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, KeyError):
             logger.warning("Corrupted filters.json — starting fresh")
     return {"filters": {}}
 
 
 def _save_data(data: dict) -> None:
-    """Persist data to disk."""
-    FILTERS_FILE.write_text(
+    """Persist data to Redis and local file."""
+    if _redis_available():
+        _redis_set(data)
+    # Always save locally too as backup
+    _local_file.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
