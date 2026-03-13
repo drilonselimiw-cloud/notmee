@@ -1,0 +1,12 @@
+services:
+  - type: worker
+    name: car-monitor-bot
+    runtime: docker
+    plan: free
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: CHECK_INTERVAL_MINUTES
+        value: "10"
+      - key: MAX_RESULTS
+        value: "50"
