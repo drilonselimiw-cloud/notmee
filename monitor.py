@@ -564,19 +564,9 @@ def check_filter(f: dict):
         for car in new_cars:
             seen_update[str(car["id"])] = True
 
-    # Also mark already-seen listings (not new) that aren't in seen_update yet
-    for car in listings:
-        cid = str(car["id"])
-        if cid not in seen_update and cid not in seen_ids:
-            seen_update[cid] = True
-        elif cid not in seen_update:
-            pass  # already tracked
-
     # Update seen IDs with matched info
-    # For cars already in seen that aren't new, keep their existing status
-    all_old_ids = {str(car["id"]): True for car in listings if str(car["id"]) in seen_ids}
-    all_old_ids.update(seen_update)
-    update_seen_ids(filter_id, all_old_ids, total_new=len(new_cars))
+    # For cars already in seen that aren't new, preserve their existing matched status
+    update_seen_ids(filter_id, seen_update, total_new=len(new_cars))
 
     if new_cars:
         logger.info(f"  Found {len(new_cars)} new car(s) for '{filter_name}'!")

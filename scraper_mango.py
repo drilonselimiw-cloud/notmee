@@ -359,9 +359,9 @@ def fetch_first_registration_year(car_code: str) -> int | None:
             )
             if resp.status_code != 200:
                 continue
-            # Look for "First Registration Date</span>...<span...>2016.05.31"
+            # Look for "First Registration Date</span>...<span...>2016.05.31" or "2016.05"
             m = re.search(
-                r'First Registration Date</span>.*?<span[^>]*>.*?(\d{4})\.\d{2}\.\d{2}',
+                r'First Registration Date</span>.*?<span[^>]*>.*?(\d{4})\.\d{2}',
                 resp.text, re.DOTALL
             )
             if m:
