@@ -342,20 +342,32 @@ def cmd_url(chat_id, args, full_text):
         else:
             listings = get_car_listings(search_url=url, max_results=MAX_RESULTS)
         if listings:
-            all_ids = {str(car["id"]): True for car in listings}
-            update_seen_ids(new_filter["id"], all_ids)
+            if min_year and platform == "mango":
+                # Check each car's first registration year
+                seen_dict = {}
+                for car in listings:
+                    reg_year = fetch_first_registration_year(car["id"])
+                    if reg_year is None:
+                        reg_year = int(car.get("year") or 0)
+                    seen_dict[str(car["id"])] = reg_year >= min_year
+            else:
+                seen_dict = {str(car["id"]): True for car in listings}
+            update_seen_ids(new_filter["id"], seen_dict)
+            matched = sum(1 for v in seen_dict.values() if v)
             count = len(listings)
         else:
             count = 0
+            matched = 0
     except Exception as e:
         logger.warning(f"Initial fetch for '{name}' failed: {e}")
         count = 0
+        matched = 0
 
-    tg_send(chat_id, (
-        f"✅ Filter created from URL!\n\n"
-        f"{format_filter_summary(new_filter)}\n\n"
-        f"Stored {count} existing car(s) — you'll only be notified about new ones."
-    ))
+    msg = f"✅ Filter created from URL!\n\n{format_filter_summary(new_filter)}\n\n"
+    msg += f"Stored {count} existing car(s) — you'll only be notified about new ones."
+    if min_year and platform == "mango" and count > 0:
+        msg += f"\n📅 min_year={min_year}: {matched} matched, {count - matched} filtered out."
+    tg_send(chat_id, msg)
 
 
 def cmd_list(chat_id):
