@@ -141,7 +141,7 @@ def add_filter(name: str, params: dict, platform: str = "encar") -> dict | str:
         "platform": platform,
         "params": params,
         "active": True,
-        "seen_ids": [],
+        "seen_ids": {},
         "created_at": datetime.now().isoformat(),
         "last_checked": None,
         "total_found": 0,
@@ -207,22 +207,46 @@ def get_filter(id_or_name: str) -> dict | None:
     return None
 
 
+def _normalize_seen(raw) -> dict:
+    """Convert old list format to new dict format {id: matched_bool}."""
+    if isinstance(raw, dict):
+        return {str(k): v for k, v in raw.items()}
+    if isinstance(raw, list):
+        return {str(x): True for x in raw}
+    return {}
+
+
 def get_seen_ids(filter_id: str) -> set:
     """Get the set of seen car IDs for a specific filter."""
     data = _load_data()
     f = data["filters"].get(filter_id)
     if f:
-        return set(str(x) for x in f.get("seen_ids", []))
+        return set(_normalize_seen(f.get("seen_ids", {})).keys())
     return set()
 
 
-def update_seen_ids(filter_id: str, new_ids: set, total_new: int = 0) -> None:
-    """Add new seen IDs for a filter and update metadata."""
+def get_seen_cars(filter_id: str) -> dict:
+    """Get seen cars dict {car_id: matched_bool} for a filter."""
+    data = _load_data()
+    f = data["filters"].get(filter_id)
+    if f:
+        return _normalize_seen(f.get("seen_ids", {}))
+    return {}
+
+
+def update_seen_ids(filter_id: str, new_ids: dict | set, total_new: int = 0) -> None:
+    """
+    Add new seen IDs for a filter and update metadata.
+    new_ids: dict {id: matched_bool} or set of ids (all treated as matched=True).
+    """
     data = _load_data()
     if filter_id in data["filters"]:
-        existing = set(str(x) for x in data["filters"][filter_id].get("seen_ids", []))
-        existing.update(str(x) for x in new_ids)
-        data["filters"][filter_id]["seen_ids"] = list(existing)
+        existing = _normalize_seen(data["filters"][filter_id].get("seen_ids", {}))
+        if isinstance(new_ids, dict):
+            existing.update({str(k): v for k, v in new_ids.items()})
+        else:
+            existing.update({str(x): True for x in new_ids})
+        data["filters"][filter_id]["seen_ids"] = existing
         data["filters"][filter_id]["last_checked"] = datetime.now().isoformat()
         data["filters"][filter_id]["total_found"] = (
             data["filters"][filter_id].get("total_found", 0) + total_new
@@ -235,7 +259,7 @@ def clear_seen_ids(id_or_name: str) -> str | None:
     data = _load_data()
     fid = _resolve_filter_id(data, id_or_name)
     if fid:
-        data["filters"][fid]["seen_ids"] = []
+        data["filters"][fid]["seen_ids"] = {}
         _save_data(data)
         return data["filters"][fid]["name"]
     return None

@@ -32,7 +32,7 @@ from notifier import send_telegram, format_price, format_mileage
 from filter_store import (
     add_filter, remove_filter, pause_filter, resume_filter,
     get_all_filters, get_active_filters, get_filter,
-    get_seen_ids, update_seen_ids, clear_seen_ids,
+    get_seen_ids, get_seen_cars, update_seen_ids, clear_seen_ids,
 )
 
 # ---------------------------------------------------------------------------
@@ -184,6 +184,8 @@ def handle_message(chat_id: str, text: str):
             cmd_resume(chat_id, args)
         elif cmd == "/clear":
             cmd_clear(chat_id, args)
+        elif cmd == "/seen":
+            cmd_seen(chat_id, args)
         elif cmd == "/status":
             cmd_status(chat_id)
         else:
@@ -202,6 +204,7 @@ def cmd_help(chat_id):
         "/pause <id or name> — Pause monitoring\n"
         "/resume <id or name> — Resume monitoring\n"
         "/clear <id or name> — Reset seen cars\n"
+        "/seen <id or name> — List seen cars (matched/filtered)\n"
         "/status — Monitor status\n"
         "/help — This message\n\n"
         f"⏱️ Checking every {CHECK_INTERVAL} min\n"
@@ -339,7 +342,7 @@ def cmd_url(chat_id, args, full_text):
         else:
             listings = get_car_listings(search_url=url, max_results=MAX_RESULTS)
         if listings:
-            all_ids = {str(car["id"]) for car in listings}
+            all_ids = {str(car["id"]): True for car in listings}
             update_seen_ids(new_filter["id"], all_ids)
             count = len(listings)
         else:
@@ -416,6 +419,62 @@ def cmd_clear(chat_id, args):
         tg_send(chat_id, f"❌ Filter '{key}' not found.")
 
 
+def cmd_seen(chat_id, args):
+    if not args:
+        tg_send(chat_id, "Usage: /seen <id or name>")
+        return
+    key = " ".join(args)
+    f = get_filter(key)
+    if not f:
+        tg_send(chat_id, f"❌ Filter '{key}' not found.")
+        return
+
+    seen = get_seen_cars(f["id"])
+    if not seen:
+        tg_send(chat_id, f"📭 No seen cars for '{f['name']}' yet.")
+        return
+
+    platform = f.get("platform", "encar")
+    matched = {cid for cid, m in seen.items() if m}
+    filtered_out = {cid for cid, m in seen.items() if not m}
+
+    lines = [f"👁️ Seen cars for '{f['name']}' ({len(seen)} total):"]
+    lines.append(f"  ✅ Matched: {len(matched)}")
+    if filtered_out:
+        lines.append(f"  ❌ Filtered out (min_year): {len(filtered_out)}")
+    lines.append("")
+
+    # Show matched cars (URLs)
+    if matched:
+        lines.append("✅ Matched:")
+        for cid in list(matched)[:30]:
+            if platform == "mango":
+                url = f"https://mangoworldcar.com/car-detail/{cid}"
+            else:
+                url = f"https://www.encar.com/dc/dc_cardetailview.do?carid={cid}"
+            lines.append(url)
+        if len(matched) > 30:
+            lines.append(f"... and {len(matched) - 30} more")
+
+    # Show filtered-out cars
+    if filtered_out:
+        lines.append("\n❌ Filtered out:")
+        for cid in list(filtered_out)[:20]:
+            if platform == "mango":
+                url = f"https://mangoworldcar.com/car-detail/{cid}"
+            else:
+                url = f"https://www.encar.com/dc/dc_cardetailview.do?carid={cid}"
+            lines.append(url)
+        if len(filtered_out) > 20:
+            lines.append(f"... and {len(filtered_out) - 20} more")
+
+    msg = "\n".join(lines)
+    # Telegram has 4096 char limit
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n... (truncated)"
+    tg_send(chat_id, msg)
+
+
 def cmd_status(chat_id):
     active = get_active_filters()
     total = get_all_filters()
@@ -489,26 +548,42 @@ def check_filter(f: dict):
     seen_ids = get_seen_ids(filter_id)
     new_cars = [car for car in listings if str(car["id"]) not in seen_ids]
 
-    # Update seen IDs with ALL listings
-    all_ids = {str(car["id"]) for car in listings}
-    update_seen_ids(filter_id, all_ids, total_new=len(new_cars))
-
     # Apply min_year filter for mango: check first registration year on detail page
     min_year = params.get("min_year")
+    seen_update = {}  # {car_id: matched_bool}
+
     if new_cars and platform == "mango" and min_year:
-        min_year = int(min_year)
+        min_year_val = int(min_year)
         filtered = []
         for car in new_cars:
             reg_year = fetch_first_registration_year(car["id"])
             if reg_year is None:
-                # Fall back to modelYear if detail page fails
                 reg_year = int(car.get("year") or 0)
-            if reg_year >= min_year:
+            if reg_year >= min_year_val:
                 filtered.append(car)
+                seen_update[str(car["id"])] = True
             else:
-                logger.info(f"  Filtered out {car['id']}: reg year {reg_year} < {min_year}")
+                seen_update[str(car["id"])] = False
+                logger.info(f"  Filtered out {car['id']}: reg year {reg_year} < {min_year_val}")
         logger.info(f"  min_year filter: {len(new_cars)} -> {len(filtered)} cars")
         new_cars = filtered
+    else:
+        for car in new_cars:
+            seen_update[str(car["id"])] = True
+
+    # Also mark already-seen listings (not new) that aren't in seen_update yet
+    for car in listings:
+        cid = str(car["id"])
+        if cid not in seen_update and cid not in seen_ids:
+            seen_update[cid] = True
+        elif cid not in seen_update:
+            pass  # already tracked
+
+    # Update seen IDs with matched info
+    # For cars already in seen that aren't new, keep their existing status
+    all_old_ids = {str(car["id"]): True for car in listings if str(car["id"]) in seen_ids}
+    all_old_ids.update(seen_update)
+    update_seen_ids(filter_id, all_old_ids, total_new=len(new_cars))
 
     if new_cars:
         logger.info(f"  Found {len(new_cars)} new car(s) for '{filter_name}'!")
