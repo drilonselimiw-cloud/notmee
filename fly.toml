@@ -1,0 +1,22 @@
+# fly.toml app configuration file generated for notmee-car-bot on 2026-03-13T01:14:59+01:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'notmee-car-bot'
+primary_region = 'nrt'
+
+[build]
+
+[env]
+  CHECK_INTERVAL_MINUTES = '15'
+  MAX_RESULTS = '500'
+
+[processes]
+  app = 'python monitor.py'
+
+# No HTTP service — this is a background Telegram bot
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '256mb'
