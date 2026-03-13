@@ -9,7 +9,7 @@ import json
 import logging
 from urllib.parse import urlparse, parse_qs, urlencode, quote
 
-import cloudscraper
+from curl_cffi import requests as curl_requests
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +85,8 @@ MANUFACTURER_CODES = {
 }
 
 
-def _get_scraper():
-    """Create a cloudscraper session to bypass Bunny CDN protection."""
-    return cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "desktop": True}
-    )
+# Browser impersonation profiles to rotate through
+_IMPERSONATE_PROFILES = ["chrome", "chrome110", "edge99", "safari15_5"]
 
 
 def build_mango_url(filters: dict) -> str:
@@ -314,28 +311,35 @@ def fetch_mango_listings(url: str) -> list[dict]:
     """
     Fetch and parse car listings from a mangoworldcar.com search URL.
     Returns a list of raw car dicts from the page's embedded data.
+    Uses curl_cffi with browser impersonation to bypass Bunny CDN.
     """
-    scraper = _get_scraper()
     headers = {
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "en-US,en;q=0.9",
     }
 
-    try:
-        response = scraper.get(url, headers=headers, timeout=45)
-        response.raise_for_status()
+    for profile in _IMPERSONATE_PROFILES:
+        try:
+            logger.info(f"MangoCar: Trying with impersonate={profile}")
+            response = curl_requests.get(
+                url, headers=headers, impersonate=profile, timeout=45
+            )
+            response.raise_for_status()
 
-        if len(response.text) < 5000:
-            logger.warning("MangoCar: Got a short response (possibly bot challenge page)")
-            return []
+            if len(response.text) < 5000:
+                logger.warning("MangoCar: Short response with %s, trying next", profile)
+                continue
 
-        items = _extract_rsc_car_data(response.text)
-        logger.info(f"MangoCar: Extracted {len(items)} listings from page")
-        return items
+            items = _extract_rsc_car_data(response.text)
+            logger.info(f"MangoCar: Extracted {len(items)} listings from page")
+            return items
 
-    except Exception as e:
-        logger.error(f"MangoCar fetch error: {e}")
-        return []
+        except Exception as e:
+            logger.warning(f"MangoCar fetch error with {profile}: {e}")
+            continue
+
+    logger.error("MangoCar: All impersonation profiles failed")
+    return []
 
 
 def get_mango_listings(filters: dict = None, search_url: str = None,
