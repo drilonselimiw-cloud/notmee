@@ -184,8 +184,8 @@ def handle_message(chat_id: str, text: str):
             cmd_resume(chat_id, args)
         elif cmd == "/clear":
             cmd_clear(chat_id, args)
-        elif cmd == "/seen":
-            cmd_seen(chat_id, args)
+        elif cmd == "/get":
+            cmd_get(chat_id, args)
         elif cmd == "/status":
             cmd_status(chat_id)
         else:
@@ -204,7 +204,7 @@ def cmd_help(chat_id):
         "/pause <id or name> — Pause monitoring\n"
         "/resume <id or name> — Resume monitoring\n"
         "/clear <id or name> — Reset seen cars\n"
-        "/seen <id or name> — List seen cars (matched/filtered)\n"
+        "/get <id or name> — List matched cars\n"
         "/status — Monitor status\n"
         "/help — This message\n\n"
         f"⏱️ Checking every {CHECK_INTERVAL} min\n"
@@ -419,9 +419,9 @@ def cmd_clear(chat_id, args):
         tg_send(chat_id, f"❌ Filter '{key}' not found.")
 
 
-def cmd_seen(chat_id, args):
+def cmd_get(chat_id, args):
     if not args:
-        tg_send(chat_id, "Usage: /seen <id or name>")
+        tg_send(chat_id, "Usage: /get <id or name>")
         return
     key = " ".join(args)
     f = get_filter(key)
@@ -431,45 +431,26 @@ def cmd_seen(chat_id, args):
 
     seen = get_seen_cars(f["id"])
     if not seen:
-        tg_send(chat_id, f"📭 No seen cars for '{f['name']}' yet.")
+        tg_send(chat_id, f"📭 No cars for '{f['name']}' yet.")
         return
 
     platform = f.get("platform", "encar")
-    matched = {cid for cid, m in seen.items() if m}
-    filtered_out = {cid for cid, m in seen.items() if not m}
+    matched = [cid for cid, m in seen.items() if m]
 
-    lines = [f"👁️ Seen cars for '{f['name']}' ({len(seen)} total):"]
-    lines.append(f"  ✅ Matched: {len(matched)}")
-    if filtered_out:
-        lines.append(f"  ❌ Filtered out (min_year): {len(filtered_out)}")
-    lines.append("")
+    if not matched:
+        tg_send(chat_id, f"📭 No matched cars for '{f['name']}' yet.")
+        return
 
-    # Show matched cars (URLs)
-    if matched:
-        lines.append("✅ Matched:")
-        for cid in list(matched)[:30]:
-            if platform == "mango":
-                url = f"https://mangoworldcar.com/car-detail/{cid}"
-            else:
-                url = f"https://www.encar.com/dc/dc_cardetailview.do?carid={cid}"
-            lines.append(url)
-        if len(matched) > 30:
-            lines.append(f"... and {len(matched) - 30} more")
-
-    # Show filtered-out cars
-    if filtered_out:
-        lines.append("\n❌ Filtered out:")
-        for cid in list(filtered_out)[:20]:
-            if platform == "mango":
-                url = f"https://mangoworldcar.com/car-detail/{cid}"
-            else:
-                url = f"https://www.encar.com/dc/dc_cardetailview.do?carid={cid}"
-            lines.append(url)
-        if len(filtered_out) > 20:
-            lines.append(f"... and {len(filtered_out) - 20} more")
+    lines = [f"✅ Matched cars for '{f['name']}' ({len(matched)}):"]
+    for cid in matched[:50]:
+        if platform == "mango":
+            lines.append(f"https://mangoworldcar.com/car-detail/{cid}")
+        else:
+            lines.append(f"https://www.encar.com/dc/dc_cardetailview.do?carid={cid}")
+    if len(matched) > 50:
+        lines.append(f"... and {len(matched) - 50} more")
 
     msg = "\n".join(lines)
-    # Telegram has 4096 char limit
     if len(msg) > 4000:
         msg = msg[:4000] + "\n... (truncated)"
     tg_send(chat_id, msg)
