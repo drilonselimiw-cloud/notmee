@@ -4,12 +4,12 @@
 #
 
 app = 'notmee-car-bot'
-primary_region = 'nrt'
+primary_region = 'ams'
 
 [build]
 
 [env]
-  CHECK_INTERVAL_MINUTES = '15'
+  CHECK_INTERVAL_MINUTES = '5'
   MAX_RESULTS = '500'
 
 [processes]
