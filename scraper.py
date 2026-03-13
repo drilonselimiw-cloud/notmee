@@ -3,6 +3,7 @@ Encar.com car listing scraper.
 Uses encar's internal API to fetch structured JSON listing data.
 """
 
+import json
 import re
 import logging
 from urllib.parse import urlparse, parse_qs, unquote
@@ -81,6 +82,7 @@ def extract_query_from_url(url: str) -> str:
         - Desktop URLs with hash fragment: www.encar.com/...#!...q=(And.Hidden.N...)
         - Desktop/API URLs with ?q= parameter
         - Mobile URLs (m.encar.com) with TG.* parameters
+        - New car.encar.com URLs with JSON 'search' parameter containing 'action' query
     """
     parsed = urlparse(url)
 
@@ -103,6 +105,18 @@ def extract_query_from_url(url: str) -> str:
     # Handle search condition parameter
     if "searchCondition" in params:
         return unquote(params["searchCondition"][0])
+
+    # Handle car.encar.com URLs with JSON 'search' parameter
+    # e.g., https://car.encar.com/list/car?page=1&search={"type":"car","action":"(And.Hidden.N...)",...}
+    if "search" in params:
+        try:
+            search_json = json.loads(unquote(params["search"][0]))
+            action = search_json.get("action", "")
+            if action and action.startswith("("):
+                logger.info("Extracted query from car.encar.com search JSON: %s", action)
+                return action
+        except (json.JSONDecodeError, KeyError, IndexError):
+            logger.warning("Failed to parse 'search' JSON param, falling back")
 
     # Handle mobile URLs (m.encar.com) with TG.* parameters
     # e.g., ?carType=kor&TG.Manufacturer=현대&TG.Model=그랜저&TG.Year_min=2020
