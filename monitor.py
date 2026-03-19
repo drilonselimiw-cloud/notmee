@@ -33,6 +33,7 @@ from filter_store import (
     add_filter, remove_filter, pause_filter, resume_filter,
     get_all_filters, get_active_filters, get_filter,
     get_seen_ids, get_seen_cars, update_seen_ids, clear_seen_ids,
+    get_all_user_ids,
 )
 
 # ---------------------------------------------------------------------------
@@ -55,8 +56,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL_MINUTES", "10"))
 MAX_RESULTS = int(os.getenv("MAX_RESULTS", "50"))
 
-# Track the chat_id from whoever messages the bot
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
 
 # ---------------------------------------------------------------------------
 # Telegram Bot (polling-based, no external lib needed)
@@ -150,12 +150,7 @@ def format_filter_summary(f: dict) -> str:
 # ---------------------------------------------------------------------------
 def handle_message(chat_id: str, text: str):
     """Route incoming message to the right handler."""
-    global CHAT_ID
-
-    # Remember chat_id
-    if not CHAT_ID:
-        CHAT_ID = str(chat_id)
-
+    chat_id = str(chat_id)
     text = text.strip()
 
     # Check if we're in a conversation
@@ -272,7 +267,7 @@ def handle_conversation_step(chat_id, text):
         tg_send(chat_id, prompt)
     else:
         # Done — create the filter
-        result = add_filter(conv["name"], conv["params"], platform=conv["platform"])
+        result = add_filter(chat_id, conv["name"], conv["params"], platform=conv["platform"])
         del CONVERSATIONS[chat_id]
         if isinstance(result, str):
             tg_send(chat_id, f"❌ {result}")
@@ -329,7 +324,7 @@ def cmd_url(chat_id, args, full_text):
     if min_year and platform == "mango":
         filter_params["min_year"] = min_year
 
-    new_filter = add_filter(name, filter_params, platform=platform)
+    new_filter = add_filter(chat_id, name, filter_params, platform=platform)
     if isinstance(new_filter, str):
         tg_send(chat_id, f"❌ {new_filter}")
         return
@@ -352,7 +347,7 @@ def cmd_url(chat_id, args, full_text):
                     seen_dict[str(car["id"])] = reg_year >= min_year
             else:
                 seen_dict = {str(car["id"]): True for car in listings}
-            update_seen_ids(new_filter["id"], seen_dict)
+            update_seen_ids(chat_id, new_filter["id"], seen_dict)
             matched = sum(1 for v in seen_dict.values() if v)
             count = len(listings)
         else:
@@ -371,7 +366,7 @@ def cmd_url(chat_id, args, full_text):
 
 
 def cmd_list(chat_id):
-    filters = get_all_filters()
+    filters = get_all_filters(chat_id)
     if not filters:
         tg_send(chat_id, "📭 No filters yet.\n\nUse /add or /url to create one.")
         return
@@ -388,7 +383,7 @@ def cmd_remove(chat_id, args):
         tg_send(chat_id, "Usage: /remove <id or name>\n\nUse /list to see filters.")
         return
     key = " ".join(args)
-    name = remove_filter(key)
+    name = remove_filter(chat_id, key)
     if name:
         tg_send(chat_id, f"🗑️ Filter '{name}' removed.")
     else:
@@ -400,7 +395,7 @@ def cmd_pause(chat_id, args):
         tg_send(chat_id, "Usage: /pause <id or name>")
         return
     key = " ".join(args)
-    name = pause_filter(key)
+    name = pause_filter(chat_id, key)
     if name:
         tg_send(chat_id, f"⏸️ Filter '{name}' paused.")
     else:
@@ -412,7 +407,7 @@ def cmd_resume(chat_id, args):
         tg_send(chat_id, "Usage: /resume <id or name>")
         return
     key = " ".join(args)
-    name = resume_filter(key)
+    name = resume_filter(chat_id, key)
     if name:
         tg_send(chat_id, f"▶️ Filter '{name}' resumed.")
     else:
@@ -424,7 +419,7 @@ def cmd_clear(chat_id, args):
         tg_send(chat_id, "Usage: /clear <id or name>")
         return
     key = " ".join(args)
-    name = clear_seen_ids(key)
+    name = clear_seen_ids(chat_id, key)
     if name:
         tg_send(chat_id, f"🔄 Seen cars cleared for '{name}'. It will re-alert on next check.")
     else:
@@ -436,12 +431,12 @@ def cmd_get(chat_id, args):
         tg_send(chat_id, "Usage: /get <id or name>")
         return
     key = " ".join(args)
-    f = get_filter(key)
+    f = get_filter(chat_id, key)
     if not f:
         tg_send(chat_id, f"❌ Filter '{key}' not found.")
         return
 
-    seen = get_seen_cars(f["id"])
+    seen = get_seen_cars(chat_id, f["id"])
     if not seen:
         tg_send(chat_id, f"📭 No cars for '{f['name']}' yet.")
         return
@@ -469,8 +464,8 @@ def cmd_get(chat_id, args):
 
 
 def cmd_status(chat_id):
-    active = get_active_filters()
-    total = get_all_filters()
+    active = get_active_filters(chat_id)
+    total = get_all_filters(chat_id)
     tg_send(chat_id, (
         f"📊 Monitor Status\n\n"
         f"Total filters: {len(total)}\n"
@@ -485,22 +480,25 @@ def cmd_status(chat_id):
 # Background monitor — checks all active filters periodically
 # ---------------------------------------------------------------------------
 def monitor_loop():
-    """Background thread: periodically check all active filters for new cars."""
+    """Background thread: periodically check all users' active filters for new cars."""
     logger.info(f"Monitor loop started — checking every {CHECK_INTERVAL} min")
 
     while True:
         try:
-            active_filters = get_active_filters()
-            if not active_filters:
-                logger.info("No active filters — skipping check")
+            user_ids = get_all_user_ids()
+            if not user_ids:
+                logger.info("No registered users — skipping check")
             else:
-                logger.info(f"Checking {len(active_filters)} active filter(s)...")
-
-                for f in active_filters:
-                    try:
-                        check_filter(f)
-                    except Exception as e:
-                        logger.error(f"Error checking filter {f['id']}: {e}")
+                for uid in user_ids:
+                    active_filters = get_active_filters(uid)
+                    if not active_filters:
+                        continue
+                    logger.info(f"Checking {len(active_filters)} active filter(s) for user {uid}...")
+                    for f in active_filters:
+                        try:
+                            check_filter(uid, f)
+                        except Exception as e:
+                            logger.error(f"Error checking filter {f['id']} for user {uid}: {e}")
 
         except Exception as e:
             logger.error(f"Monitor loop error: {e}")
@@ -508,7 +506,7 @@ def monitor_loop():
         time.sleep(CHECK_INTERVAL * 60)
 
 
-def check_filter(f: dict):
+def check_filter(chat_id: str, f: dict):
     """Check a single filter for new listings and notify if found."""
     filter_id = f["id"]
     filter_name = f["name"]
@@ -538,7 +536,7 @@ def check_filter(f: dict):
         return
 
     # Compare with seen
-    seen_ids = get_seen_ids(filter_id)
+    seen_ids = get_seen_ids(chat_id, filter_id)
     new_cars = [car for car in listings if str(car["id"]) not in seen_ids]
 
     # Apply min_year filter for mango: check first registration year on detail page
@@ -566,7 +564,7 @@ def check_filter(f: dict):
 
     # Update seen IDs with matched info
     # For cars already in seen that aren't new, preserve their existing matched status
-    update_seen_ids(filter_id, seen_update, total_new=len(new_cars))
+    update_seen_ids(chat_id, filter_id, seen_update, total_new=len(new_cars))
 
     if new_cars:
         logger.info(f"  Found {len(new_cars)} new car(s) for '{filter_name}'!")
@@ -575,11 +573,11 @@ def check_filter(f: dict):
             logger.info(f"    NEW: {title} | {format_price(car['price'], platform)} | {car['url']}")
 
         # Send notifications
-        if CHAT_ID and BOT_TOKEN:
+        if chat_id and BOT_TOKEN:
             send_telegram(
                 new_cars,
                 bot_token=BOT_TOKEN,
-                chat_id=CHAT_ID,
+                chat_id=chat_id,
                 filter_name=filter_name,
                 platform=platform,
             )
@@ -591,7 +589,7 @@ def check_filter(f: dict):
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    global OFFSET, CHAT_ID
+    global OFFSET
 
     if not BOT_TOKEN:
         print("ERROR: TELEGRAM_BOT_TOKEN not set in .env")
@@ -601,6 +599,7 @@ def main():
 
     print(f"🚗 Car Monitor Bot starting (Encar + MangoCar)...")
     print(f"   Check interval: {CHECK_INTERVAL} min")
+    print(f"   Multi-user mode enabled")
     print(f"   Send /start to your bot on Telegram to begin!\n")
 
     # Start background monitor thread
@@ -621,11 +620,6 @@ def main():
 
             chat_id = msg["chat"]["id"]
             text = msg["text"]
-
-            # Auto-capture chat_id
-            if not CHAT_ID:
-                CHAT_ID = str(chat_id)
-                logger.info(f"Chat ID captured: {CHAT_ID}")
 
             try:
                 handle_message(chat_id, text)
